@@ -1,0 +1,190 @@
+Here’s a sharpened roadmap to build Project Odysseus—the Hockey Analytics Core (HAC)—from research foundations to deployment in agentic systems:
+
+🔬 1. Research Foundations & Dataset Assembly
+1.1 Leverage Sports/SportsPose datasets
+
+Use existing datasets like SportsPose (176k dynamic 3D poses across various sports) to pre-train pose models 
+reddit.com
++2
+reddit.com
++2
+researchgate.net
++2
+reddit.com
++9
+arxiv.org
++9
+reddit.com
++9
+.
+
+While HARPET focuses on ice hockey, it demonstrates the success of pose + optical flow for action (~85% accuracy) 
+pmc.ncbi.nlm.nih.gov
++3
+arxiv.org
++3
+ar5iv.labs.arxiv.org
++3
+. Adapt this for field hockey.
+
+1.2 Build a custom Field Hockey dataset
+
+Define action labels (e.g., pass, shot, dribble, tackle).
+
+Download high-quality game footage from YouTube, Internet Archive, Hugging Face.
+
+Apply shot detection (via PySceneDetect), keyframe sampling, and sample segmentation.
+
+1.3 Annotation strategy
+
+Use CVAT for bounding boxes (players, ball, stick), keypoints (COCO-style skeletons + stick), and clip-level action tags.
+
+Archive metadata in PostGIS for geometry indexing.
+
+🧠 2. Pipeline Architecture
+Phase 0—Environment Setup
+Ubuntu 22.04 (or WSL2), RTX 4070, CUDA 12
+
+Docker + NVIDIA Container Toolkit
+
+Containers for PostgreSQL/PostGIS, CVAT, MinIO (or shared volume), Shared SSD directories.
+
+Phase 1—Data Acquisition & Cataloging
+Build Python scripts to:
+
+Download from sources (yt-dlp, archive.org, Hugging Face).
+
+Insert metadata into PostgreSQL.
+
+Process videos: shot detection, clip segmentation, keyframe extraction.
+
+Store in SSD and log frame/clip metadata in DB.
+
+Phase 2—Annotation Engine
+Deploy CVAT via Docker.
+
+Automate:
+
+Export un-annotated keyframes to tasks via PostgreSQL queries.
+
+Create CVAT projects for detection, pose, action.
+
+Parse completed annotations into COCO/YOL-Oriented structures and store in dataset folders.
+
+Phase 3—Model Training
+3A: YOLOv8-Pose Detector
+
+Inputs: annotated keyframes.
+
+Framework: Ultralytics YOLOv8-Pose.
+
+Fine-tune for players, ball, stick, keypoints.
+
+3B: Multi-modal Action Recognition
+
+Use OpenMMLab's mmaction2 – models like SlowFast or MViT.
+
+Input streams: frames + pose keypoints sequences (2D).
+
+Leverage two-stream architecture: pose + optical flow, as per the HARPET precedent (~85%) 
+pmc.ncbi.nlm.nih.gov
++2
+reddit.com
++2
+researchgate.net
++2
+ncbi.nlm.nih.gov
++5
+ar5iv.labs.arxiv.org
++5
+pmc.ncbi.nlm.nih.gov
++5
+link.springer.com
+ncbi.nlm.nih.gov
+arxiv.org
++1
+ar5iv.labs.arxiv.org
++1
+.
+
+3C: AI-assisted Geometric Analysis
+
+Implement frame-to-field homography (user calibration via clicks on field corners).
+
+Compute real-world coordinates: player speed, ball velocity, shot angles, formation metrics, possession.
+
+3D: On-Demand Super-Resolution (ESRGAN)
+
+Fine-tune on hockey-specific low/high-res patch pairs.
+
+Called selectively when cropped area confidence is low (e.g., blurry ball or jersey number).
+
+🧩 4. HAC Integration & API
+Build HockeyAnalyticsCore class in Python:
+
+Load YOLOv8-Pose, Action Classifier, ESRGAN.
+
+process_frame(frame):
+
+Detect objects & poses.
+
+Buffer pose sequences for each track ID.
+
+Run action classifier per player.
+
+Compute geometry & output Game State JSON as per your schema.
+
+Wrap with FastAPI: /process_video_frame endpoint.
+
+Optionally build video agent: loop over frames, collect game events, stream structured output for downstream systems (coaches, broadcasters, analytics agents).
+
+🤖 5. Agentic Applications & Extensions
+Live Tagging Agent: monitors HAC output to trigger events (goals, penalty corners), clip them, and push to dashboards.
+
+Tactical Decision Agent: based on formations and possession, recommends substitutions, set-play strategies, or predicts scoring likelihood.
+
+AR/UX Agent: overlay real-time analytics (e.g., player speeds, passes) on video for broadcast or coaching.
+
+📊 Summary Roadmap
+Phase	Outcome
+Foundation	Pre-trained pose/action backbones, dataset assembled
+Pipeline	Acquisition → Annotation → Training
+Sub-modules	Detection+Pose, Action Recognition, Geometry, SSR
+Integration	HAC core + API
+Agentic Tools	Event clipper, Tactical advisor, AR overlays
+
+✅ Next Steps
+Audit computational & storage needs for video pipelines (e.g., shot detection, storage volume).
+
+Prototype data ingestion from one source (e.g., YouTube) and database logging.
+
+Pilot annotation & YOLOv8-Pose fine-tuning using a small annotated batch.
+
+Implement two-stream action classifier with pose + flow features.
+
+Integrate homography & geometric computations on test clips.
+
+Wrap HAC module with API and simulate agentic clients (e.g., clip generation, suggestion agents).
+
+Evaluate end-to-end performance on held-back test video clips.
+
+📚 Research & Tools References
+Pose + Optical Flow for hockey: HARPET (~85% accuracy) 
+reddit.com
++9
+ar5iv.labs.arxiv.org
++9
+en.wikipedia.org
++9
+pmc.ncbi.nlm.nih.gov
++3
+arxiv.org
++3
+ar5iv.labs.arxiv.org
++3
+
+SportsPose 3D pose dataset for initialization 
+arxiv.org
+
+Tools: Ultralytics YOLOv8-Pose, OpenMMLab's mmcv/mmpose/mmaction2, PySceneDetect, CVAT, PostGIS.
+

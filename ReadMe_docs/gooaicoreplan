@@ -1,0 +1,728 @@
+Of course. This is the Master Execution Document for Project Odysseus.
+
+This document is designed to be parsed and executed by a large language model within an AI-native environment like Cursor, using a terminal for execution and a workflow engine like Windmill for orchestration. Each step is atomic, verifiable, and builds upon the last.
+
+Execute this document from the root of the project directory.
+
+PROJECT_ODYSSEUS_MANIFEST.md
+
+Project Name: Odysseus - The Unified Hockey Analytics Core (HAC)
+Objective: To create a sophisticated, locally-trained AI module that ingests raw field hockey video and outputs rich, structured analytical data. This core will serve as the foundation for future broadcast and coaching applications.
+Core Technologies:
+
+Editor: Cursor (for AI-assisted code generation and editing)
+
+Orchestration: Windmill.dev (or similar script-based workflow engine)
+
+Execution: Bash Terminal
+
+Containerization: Docker, Docker Compose
+
+GPU Acceleration: NVIDIA CUDA, NVIDIA Container Toolkit
+
+Database: PostgreSQL + PostGIS
+
+Annotation: CVAT (Computer Vision Annotation Tool)
+
+AI/ML Stack: Python, PyTorch, Ultralytics (YOLOv8), OpenMMLab (MMPose, MMAction2), FastAPI
+
+PHASE 0: THE LABORATORY - Environment Setup and Initialization
+
+Objective: Create a reproducible, containerized development environment for all subsequent steps.
+
+### STEP 0.1: Create Project Directory Structure
+Tooling: bash
+Execution Commands:
+
+Generated bash
+mkdir -p project-odysseus
+cd project-odysseus
+mkdir -p data/{raw_video,processed/frames,processed/clips,datasets/detection,datasets/pose,datasets/action,models}
+mkdir -p scripts
+mkdir -p logs
+touch README.md
+echo "# Project Odysseus" > README.md
+echo "PHASE 0.1 COMPLETE: Project directory structure created."
+
+
+Testing & Verification: Run ls -R. You should see the complete directory tree.
+
+### STEP 0.2: Create the Docker Compose Configuration
+Objective: Define all services (database, annotation tool, and development environment) in a single configuration file.
+Tooling: Cursor
+File Creation: Create the file docker-compose.yml with the following content:
+
+Generated yaml
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: odysseus_db
+    environment:
+      - POSTGRES_USER=hockey_user
+      - POSTGRES_PASSWORD=strongpassword
+      - POSTGRES_DB=hockey_analytics
+    volumes:
+      - odysseus-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hockey_user -d hockey_analytics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cvat:
+    image: cvat/cvat:v2.11.0
+    container_name: odysseus_cvat
+    ports:
+      - "8080:8080"
+    environment:
+      - CVAT_SUPERUSER_USERNAME=admin
+      - CVAT_SUPERUSER_PASSWORD=adminpassword
+      - CVAT_SUPERUSER_EMAIL=admin@example.com
+    volumes:
+      - odysseus-cvat-data:/home/django/data
+      - ./data:/home/django/share:ro # Mount local data folder read-only
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  dev_env:
+    image: nvcr.io/nvidia/pytorch:23.10-py3
+    container_name: odysseus_dev
+    command: /bin/bash -c "pip install ultralytics 'opencv-python-headless' psycopg2-binary SQLAlchemy PySceneDetect[opencv] fastapi uvicorn[standard] python-multipart mmpose mmcv mmaction2 'requests' && sleep infinity"
+    volumes:
+      - .:/workspace # Mount the entire project directory
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    depends_on:
+      - db
+
+volumes:
+  odysseus-db-data:
+  odysseus-cvat-data:
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Yaml
+IGNORE_WHEN_COPYING_END
+
+Testing & Verification: The file docker-compose.yml exists and contains the correct configuration.
+
+### STEP 0.3: Launch and Verify Services
+Objective: Start all background services and confirm they are running correctly.
+Tooling: docker-compose
+Execution Commands:
+
+Generated bash
+echo "Starting all services in detached mode..."
+docker-compose up -d
+echo "Waiting for services to stabilize..."
+sleep 30
+docker ps
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+
+Testing & Verification: The output of docker ps should show three running containers: odysseus_db, odysseus_cvat, and odysseus_dev, all with Up status. Navigate to http://localhost:8080 in a browser; you should see the CVAT login screen.
+
+PHASE 1: THE GREAT DATA EXPEDITION - Acquisition & Cataloging
+
+Objective: Automate the download and pre-processing of video data, cataloging everything in the database.
+
+### STEP 1.1: Initialize Database Schema
+Objective: Create the necessary tables in the PostgreSQL database.
+Tooling: Cursor, docker
+File Creation: Create the file scripts/01_setup_database.py with the following content:
+
+Generated python
+import psycopg2
+import logging
+import os
+
+# --- Configuration ---
+DB_NAME = "hockey_analytics"
+DB_USER = "hockey_user"
+DB_PASS = "strongpassword"
+DB_HOST = "localhost" # Since we mapped the port
+DB_PORT = "5432"
+
+LOG_FILE = "logs/01_setup_database.log"
+
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+
+def create_tables():
+    """Create tables in the PostgreSQL database."""
+    commands = (
+        """
+        CREATE TABLE IF NOT EXISTS videos (
+            video_id SERIAL PRIMARY KEY,
+            source_url VARCHAR(512) UNIQUE NOT NULL,
+            title VARCHAR(255),
+            local_path VARCHAR(512) NOT NULL,
+            download_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_status VARCHAR(20) NOT NULL DEFAULT 'unprocessed'
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS video_clips (
+            clip_id SERIAL PRIMARY KEY,
+            parent_video_id INTEGER NOT NULL REFERENCES videos(video_id),
+            local_path VARCHAR(512) NOT NULL,
+            start_time_sec FLOAT,
+            end_time_sec FLOAT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS keyframes (
+            frame_id SERIAL PRIMARY KEY,
+            parent_video_id INTEGER NOT NULL REFERENCES videos(video_id),
+            local_path VARCHAR(512) NOT NULL,
+            timestamp_sec FLOAT
+        )
+        """
+    )
+    conn = None
+    try:
+        conn = psycopg2.connect(
+            dbname=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, port=DB_PORT
+        )
+        cur = conn.cursor()
+        for command in commands:
+            cur.execute(command)
+        cur.close()
+        conn.commit()
+        logging.info("Tables created successfully or already exist.")
+    except (Exception, psycopg2.DatabaseError) as error:
+        logging.error(error)
+    finally:
+        if conn is not None:
+            conn.close()
+
+if __name__ == '__main__':
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+    create_tables()
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Python
+IGNORE_WHEN_COPYING_END
+
+Execution Command:
+
+Generated bash
+docker exec odysseus_dev python /workspace/scripts/01_setup_database.py
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+
+Testing & Verification: Check the log file logs/01_setup_database.log. It should state "Tables created successfully".
+
+### STEP 1.2: Acquire and Process Videos
+Objective: Download videos from a source and process them into clips and keyframes.
+Tooling: Cursor, docker
+File Creation: Create the file scripts/02_acquire_and_process.py with the following content:
+
+Generated python
+# This is a conceptual script. Actual implementation requires more robust error handling.
+# This script would be run inside the 'odysseus_dev' container.
+# It combines acquisition, scene detection, and frame extraction.
+
+import os
+import subprocess
+import psycopg2
+import logging
+from scenedetect import open_video, SceneManager
+from scenedetect.detectors import ContentDetector
+from scenedetect.video_splitter import split_video_ffmpeg
+
+# --- Configuration (same as before) ---
+DB_NAME = "hockey_analytics"
+DB_USER = "hockey_user"
+DB_PASS = "strongpassword"
+DB_HOST = "localhost"
+DB_PORT = "5432"
+
+RAW_VIDEO_DIR = "/workspace/data/raw_video"
+CLIPS_DIR = "/workspace/data/processed/clips"
+FRAMES_DIR = "/workspace/data/processed/frames"
+
+LOG_FILE = "logs/02_acquire_and_process.log"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()])
+
+def get_db_connection():
+    return psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, port=DB_PORT)
+
+def download_video(url):
+    logging.info(f"Downloading: {url}")
+    # Using yt-dlp to download
+    # The -o flag specifies the output template
+    result = subprocess.run(
+        ['yt-dlp', '-f', 'best[ext=mp4]', '-o', f'{RAW_VIDEO_DIR}/%(id)s.%(ext)s', url],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        # Find the downloaded file path from stdout
+        for line in result.stdout.splitlines():
+            if '[download] Destination:' in line:
+                filepath = line.split('Destination: ')[1]
+                logging.info(f"Successfully downloaded to {filepath}")
+                return filepath
+    logging.error(f"Failed to download {url}: {result.stderr}")
+    return None
+
+def find_scenes(video_path):
+    video = open_video(video_path)
+    scene_manager = SceneManager()
+    scene_manager.add_detector(ContentDetector(threshold=27.0))
+    scene_manager.detect_scenes(video, show_progress=True)
+    return scene_manager.get_scene_list()
+
+def process_video(video_id, video_path):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # 1. Split into clips
+    logging.info(f"Splitting {video_path} into clips...")
+    scene_list = find_scenes(video_path)
+    split_video_ffmpeg(video_path, scene_list, output_dir=CLIPS_DIR)
+    for i, scene in enumerate(scene_list):
+        start_sec = scene[0].get_seconds()
+        end_sec = scene[1].get_seconds()
+        clip_path = f"{CLIPS_DIR}/{os.path.basename(video_path).split('.')[0]}-{i+1:03d}.mp4"
+        if os.path.exists(clip_path):
+            cur.execute(
+                "INSERT INTO video_clips (parent_video_id, local_path, start_time_sec, end_time_sec) VALUES (%s, %s, %s, %s)",
+                (video_id, clip_path, start_sec, end_sec)
+            )
+    logging.info(f"Saved {len(scene_list)} clip records to DB.")
+
+    # 2. Extract keyframes (e.g., 2 FPS)
+    logging.info(f"Extracting keyframes from {video_path}...")
+    video_basename = os.path.basename(video_path).split('.')[0]
+    frame_output_folder = os.path.join(FRAMES_DIR, video_basename)
+    os.makedirs(frame_output_folder, exist_ok=True)
+    frame_output_pattern = os.path.join(frame_output_folder, 'frame-%06d.jpg')
+    subprocess.run(['ffmpeg', '-i', video_path, '-vf', 'fps=2', frame_output_pattern])
+    # ... logic to find extracted frames and add to DB ...
+    
+    # 3. Update video status
+    cur.execute("UPDATE videos SET processed_status = 'processed' WHERE video_id = %s", (video_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def main(video_urls):
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    for url in video_urls:
+        cur.execute("SELECT video_id FROM videos WHERE source_url = %s", (url,))
+        if cur.fetchone():
+            logging.info(f"URL already processed: {url}")
+            continue
+
+        local_path = download_video(url)
+        if local_path:
+            # Assuming title can be derived from path for simplicity
+            title = os.path.basename(local_path)
+            cur.execute(
+                "INSERT INTO videos (source_url, title, local_path) VALUES (%s, %s, %s) RETURNING video_id",
+                (url, title, local_path)
+            )
+            video_id = cur.fetchone()[0]
+            conn.commit()
+            logging.info(f"Inserted video {video_id} into DB.")
+            process_video(video_id, local_path)
+
+    cur.close()
+    conn.close()
+
+if __name__ == '__main__':
+    # --- Video sources to be processed ---
+    # Find legal-to-use, Creative Commons, or public domain hockey videos
+    SOURCES = [
+        "https://www.youtube.com/watch?v=A62011oieL8", # Example: Public Domain Archival Footage
+        # Add more YouTube, Archive.org, etc. URLs here
+    ]
+    main(SOURCES)
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Python
+IGNORE_WHEN_COPYING_END
+
+Execution Command:
+
+Generated bash
+echo "Starting data acquisition and processing. This may take a long time."
+docker exec odysseus_dev python /workspace/scripts/02_acquire_and_process.py
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+
+Testing & Verification:
+
+Check logs/02_acquire_and_process.log for progress and errors.
+
+Inspect the data/raw_video, data/processed/clips, and data/processed/frames directories. They should be populated.
+
+Connect to the database and run SELECT * FROM videos; and SELECT * FROM video_clips;. The tables should contain records.
+
+PHASE 2: THE ANNOTATION ENGINE - Building Ground Truth
+
+Objective: Use CVAT to annotate the extracted frames and prepare datasets. This phase includes a manual step.
+
+### STEP 2.1: Create Annotation Task in CVAT
+Objective: Programmatically create a task in CVAT using the data we have processed.
+Note: This is a simplified script. A production version would use the CVAT SDK.
+File Creation: Create scripts/03_create_cvat_task.py.
+
+Generated python
+import requests
+import json
+import os
+import glob
+import logging
+
+# --- Configuration ---
+CVAT_HOST = "http://localhost:8080"
+CVAT_USER = "admin"
+CVAT_PASS = "adminpassword"
+FRAMES_DIR = "/workspace/data/processed/frames" # Path inside the dev container
+SHARE_PATH_PREFIX = "/home/django/share/processed/frames" # Path CVAT sees
+
+LOG_FILE = "logs/03_create_cvat_task.log"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()])
+
+def create_task(session, task_name, labels, image_files):
+    task_spec = {
+        "name": task_name,
+        "labels": labels,
+        "image_quality": 85
+    }
+    
+    # Create the task
+    response = session.post(f"{CVAT_HOST}/api/tasks", json=task_spec)
+    response.raise_for_status()
+    task_data = response.json()
+    task_id = task_data['id']
+    logging.info(f"Created task ID: {task_id} - '{task_name}'")
+
+    # Upload data
+    data_spec = {
+        "image_quality": 85,
+        "server_files": image_files # Use server files since we mounted a share
+    }
+    response = session.post(f"{CVAT_HOST}/api/tasks/{task_id}/data", json=data_spec)
+    response.raise_for_status()
+    logging.info(f"Data upload initiated for task {task_id}. Check CVAT UI for progress.")
+
+
+if __name__ == "__main__":
+    session = requests.Session()
+    session.auth = (CVAT_USER, CVAT_PASS)
+
+    # --- Define our annotation projects ---
+    
+    # Project 1: Object Detection
+    detection_labels = [
+        {"name": "player_home"},
+        {"name": "player_away"},
+        {"name": "ball"},
+        {"name": "stick"},
+        {"name": "goalkeeper"}
+    ]
+    # Find some frames to annotate (e.g., first 200)
+    # The path must be relative to the 'share' mount point in CVAT
+    frame_files = [os.path.join(SHARE_PATH_PREFIX, os.path.basename(p)) for p in sorted(glob.glob(f"{FRAMES_DIR}/*/*.jpg"))[:200]]
+
+    try:
+        create_task(session, "Hockey_Object_Detection_01", detection_labels, frame_files)
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to create task: {e.response.text}")
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Python
+IGNORE_WHEN_COPYING_END
+
+Execution Command:
+
+Generated bash
+docker exec odysseus_dev python /workspace/scripts/03_create_cvat_task.py
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+
+Testing & Verification: Log in to CVAT (http://localhost:8080). You should see a new task named "Hockey_Object_Detection_01" populated with images.
+
+### STEP 2.2: Manual Annotation
+Objective: Annotate the data to create the ground truth dataset.
+Tooling: Web Browser
+Execution:
+
+Go to http://localhost:8080 and log in.
+
+Open the "Hockey_Object_Detection_01" task.
+
+Meticulously draw bounding boxes around the specified objects in each image.
+
+Once complete, save the job.
+This is a manual, time-consuming step. The quality of your model depends entirely on the quality of your annotations.
+
+### STEP 2.3: Export and Format Annotations
+Objective: Download the completed annotations from CVAT and format them for model training.
+Note: This is a conceptual script showing the workflow. A real script would use the API to download the dataset ZIP.
+Execution (Manual for now, can be automated):
+
+In the CVAT UI, go to the Tasks page.
+
+Find your completed task and click "Actions" -> "Export task dataset".
+
+Choose the "YOLO 1.1" format.
+
+A zip file will be created. Download it.
+
+Unzip the contents into data/datasets/detection/.
+Testing & Verification: The data/datasets/detection/ directory should contain a obj_train_data folder with images and corresponding .txt label files.
+
+PHASE 3: UNIFIED MODULE - Model Training
+
+Objective: Train the foundational YOLOv8-Pose model on our custom annotated data.
+
+### STEP 3.1: Train YOLOv8-Pose Model
+Objective: Fine-tune a pre-trained model to detect players and their poses.
+Note: We are using our object detection dataset. A real pose model would require a pose annotation task (annotating keypoints) in CVAT.
+File Creation: Create the file scripts/04_train_yolo.py.
+
+Generated python
+import os
+from ultralytics import YOLO
+import logging
+
+# --- Configuration ---
+DATASET_YAML_PATH = '/workspace/data/datasets/detection/dataset.yaml'
+MODEL_TO_TRAIN = 'yolov8n.pt' # Start with object detection. Use 'yolov8n-pose.pt' for pose.
+EPOCHS = 50
+IMG_SIZE = 640
+BATCH_SIZE = 16 # Adjust based on your 4070's VRAM
+PROJECT_NAME = 'Hockey_Analysis'
+RUN_NAME = 'yolov8n_detection_run1'
+
+LOG_FILE = 'logs/04_train_yolo.log'
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()])
+
+def create_dataset_yaml():
+    """Creates the dataset.yaml file required by YOLO."""
+    content = f"""
+path: /workspace/data/datasets/detection
+train: obj_train_data/images
+val: obj_train_data/images  # For simplicity, using same for train/val. Split properly for real projects.
+
+names:
+  0: player_home
+  1: player_away
+  2: ball
+  3: stick
+  4: goalkeeper
+"""
+    with open(DATASET_YAML_PATH, 'w') as f:
+        f.write(content)
+    logging.info(f"Created {DATASET_YAML_PATH}")
+
+def main():
+    create_dataset_yaml()
+
+    # Load a pretrained model
+    model = YOLO(MODEL_TO_TRAIN)
+
+    logging.info("Starting model training...")
+    # Train the model
+    results = model.train(
+        data=DATASET_YAML_PATH,
+        epochs=EPOCHS,
+        imgsz=IMG_SIZE,
+        batch=BATCH_SIZE,
+        project=PROJECT_NAME,
+        name=RUN_NAME
+    )
+    logging.info(f"Training complete. Model saved in runs/{PROJECT_NAME}/{RUN_NAME}")
+
+if __name__ == '__main__':
+    main()
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Python
+IGNORE_WHEN_COPYING_END
+
+Execution Command:
+
+Generated bash
+echo "Starting model training. This will take a significant amount of time and use the GPU."
+docker exec odysseus_dev python /workspace/scripts/04_train_yolo.py
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+
+Testing & Verification:
+
+Monitor the training progress in the terminal.
+
+After completion, a new directory will be created: Hockey_Analysis/yolov8n_detection_run1/.
+
+Inside .../weights/, you will find best.pt. This is your trained model.
+
+PHASE 4: UNIFICATION - The HAC API
+
+Objective: Create a FastAPI service that loads the trained model and provides an endpoint for real-time analysis.
+
+### STEP 4.1: Create the HAC API Service
+Objective: Build the main application that serves the AI model.
+File Creation: Create scripts/05_hac_api.py.
+
+Generated python
+import base64
+import cv2
+import numpy as np
+import logging
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from ultralytics import YOLO
+
+# --- Configuration ---
+MODEL_PATH = '/workspace/Hockey_Analysis/yolov8n_detection_run1/weights/best.pt'
+LOG_FILE = 'logs/05_hac_api.log'
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()])
+
+# --- FastAPI App ---
+app = FastAPI(title="Hockey Analytics Core (HAC)")
+
+# --- Load Model ---
+try:
+    model = YOLO(MODEL_PATH)
+    logging.info("Model loaded successfully.")
+except Exception as e:
+    logging.error(f"Failed to load model: {e}")
+    model = None
+
+# --- API Models ---
+class FrameInput(BaseModel):
+    image_b64: str # Base64 encoded image string
+
+class DetectionResult(BaseModel):
+    box: list[float]
+    confidence: float
+    class_id: int
+    class_name: str
+
+class FrameOutput(BaseModel):
+    status: str
+    detections: list[DetectionResult]
+
+
+@app.on_event("startup")
+async def startup_event():
+    if model is None:
+        raise RuntimeError("Model could not be loaded. API cannot start.")
+    logging.info("HAC API is ready.")
+
+@app.post("/process_frame", response_model=FrameOutput)
+async def process_frame(payload: FrameInput):
+    try:
+        # Decode image
+        img_bytes = base64.b64decode(payload.image_b64)
+        img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+        img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image data: {e}")
+
+    # Run inference
+    results = model(img)
+    
+    # Process results
+    output_detections = []
+    for r in results:
+        for box in r.boxes:
+            class_id = int(box.cls[0])
+            detection = DetectionResult(
+                box=box.xyxyn[0].tolist(), # Normalized xyxy
+                confidence=float(box.conf[0]),
+                class_id=class_id,
+                class_name=r.names[class_id]
+            )
+            output_detections.append(detection)
+
+    return FrameOutput(status="success", detections=output_detections)
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok" if model else "degraded"}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Python
+IGNORE_WHEN_COPYING_END
+
+Execution Command:
+
+Generated bash
+echo "Starting the HAC API on port 8000..."
+docker exec -d odysseus_dev uvicorn --host 0.0.0.0 --port 8000 --app-dir /workspace/scripts 05_hac_api:app
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+
+Testing & Verification:
+
+Run docker logs odysseus_dev and check for "HAC API is ready."
+
+Send a health check request from your local machine's terminal: curl http://localhost:8000/health. It should return {"status":"ok"}.
+
+Full Test: Create a small python script on your host machine to encode an image and send it to the API, then print the results. This validates the entire pipeline.

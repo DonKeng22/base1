@@ -1,0 +1,275 @@
+# Project Odysseus: Hockey Analytics Core (HAC) — Full Implementation Blueprint
+
+## Overview
+
+This document outlines the complete implementation strategy for the Hockey Analytics Core (HAC) — a modular, local-first AI system that extracts structured "Game State" data from field hockey videos. It is designed to be executed inside development environments like **Cursor** and **Windsurf**, with strong terminal integration, code creation, logging, and documentation baked into each phase.
+
+---
+
+## Phase 0: Environment Setup ("The Laboratory")
+
+### Objective
+
+Prepare a local system for high-performance, containerized multi-modal video analytics.
+
+### Terminal Setup Checklist
+
+```bash
+# OS & GPU
+lsb_release -a             # Ensure Ubuntu 22.04 or WSL2
+nvidia-smi                 # Confirm RTX 4070 GPU recognized
+
+# Docker Setup
+sudo apt install docker.io docker-compose
+sudo usermod -aG docker $USER
+
+# NVIDIA Container Toolkit
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+sudo apt update && sudo apt install -y nvidia-docker2
+sudo systemctl restart docker
+
+# Verify GPU inside Docker
+sudo docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+```
+
+### Directory Structure
+
+```bash
+mkdir -p ~/hac/data/{raw_video,processed/frames,datasets/{yolo,pose,action}}
+mkdir -p ~/hac/scripts ~/hac/logs ~/hac/models
+```
+
+### Core Services via Docker Compose
+
+Create a `docker-compose.yml` with services for:
+
+* PostgreSQL + PostGIS
+* CVAT
+* MinIO (optional for object storage)
+* Jupyter/Dev container with all required libraries (Ultralytics, OpenMMLab, etc.)
+
+---
+
+## Phase 1: Data Acquisition & Cataloging ("The Great Expedition")
+
+### Objectives
+
+* Download, process, and organize legal hockey video
+* Log metadata in PostgreSQL
+
+### Scripts to Implement
+
+1. **source\_discovery.py** — Load list of YouTube channels, archive.org sources.
+2. **video\_downloader.py** — Use `yt-dlp` or `requests` to download, extract metadata.
+3. **video\_logger.py** — Inserts records into PostgreSQL `videos` table.
+4. **video\_processor.py** —
+
+   * Uses `PySceneDetect` to segment clips
+   * Uses `OpenCV` to extract keyframes (2-5 FPS)
+   * Stores clips and frames
+   * Logs results into `clips` and `frames` tables
+
+### PostgreSQL Schema
+
+```sql
+CREATE TABLE videos (
+    id SERIAL PRIMARY KEY,
+    source TEXT, title TEXT, duration INT, resolution TEXT,
+    downloaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE clips (
+    id SERIAL PRIMARY KEY,
+    video_id INT REFERENCES videos(id),
+    path TEXT, start_time FLOAT, end_time FLOAT
+);
+
+CREATE TABLE frames (
+    id SERIAL PRIMARY KEY,
+    clip_id INT REFERENCES clips(id),
+    path TEXT, timestamp FLOAT
+);
+```
+
+### Logging Format (JSON per job)
+
+```json
+{
+  "timestamp": "2025-07-02T16:30:00",
+  "video_id": 101,
+  "download_success": true,
+  "frame_count": 1200,
+  "error": null
+}
+```
+
+---
+
+## Phase 2: Annotation Engine ("Ground Truth")
+
+### Objectives
+
+* Annotate detection, pose, action classification using CVAT
+* Automate job creation and parsing
+
+### Key Scripts
+
+1. **create\_cvat\_task.py** —
+
+   * Queries DB for unannotated keyframes/clips
+   * Uses CVAT API to create new task
+
+2. **parse\_exports.py** —
+
+   * Pulls YOLO/COCO annotations
+   * Parses and saves into `/datasets/yolo`, `/datasets/pose`, etc.
+
+### CVAT Projects
+
+| Project | Type             | Labels                                  |
+| ------- | ---------------- | --------------------------------------- |
+| Detect  | Object Detection | player\_home, player\_away, ball, stick |
+| Pose    | Pose Estimation  | 17 COCO keypoints                       |
+| Action  | Classification   | pass, shot\_on\_goal, dribble, tackle   |
+
+---
+
+## Phase 3: Model Training ("The Unified Module")
+
+### Submodule A: YOLOv8-Pose Detection
+
+```python
+from ultralytics import YOLO
+model = YOLO('yolov8n-pose.pt')
+model.train(data='dataset.yaml', epochs=50, imgsz=640, batch=16)
+```
+
+### Submodule B: Action Recognition (mmaction2)
+
+```bash
+# Setup MMAction2
+cd ~/hac/libs && git clone https://github.com/open-mmlab/mmaction2
+conda create -n mmaction python=3.9 -y && conda activate mmaction
+pip install -r requirements.txt
+# Use SlowFast config or MViT with pose inputs
+```
+
+### Submodule C: Geometry Engine
+
+```python
+# Camera calibration using homography
+H = cv2.getPerspectiveTransform(image_pts, field_pts)
+real_coords = cv2.perspectiveTransform(img_coords, H)
+```
+
+### Submodule D: Super-Resolution
+
+```python
+# ESRGAN Inference
+from basicsr.archs.rrdbnet_arch import RRDBNet
+from realesrgan import RealESRGANer
+# Pass low-res ROI to model on demand
+```
+
+---
+
+## Phase 4: HAC API Wrapper ("The Core")
+
+### Python Module: `hockey_analytics_core.py`
+
+```python
+class HockeyAnalyticsCore:
+    def __init__(self):
+        # Load YOLO, Action, ESRGAN
+        pass
+
+    def process_frame(self, frame):
+        # Run detection, pose, action, geometry
+        return {
+            "frame_id": ..., "timestamp": ..., "game_state": { ... }
+        }
+```
+
+### API Interface with FastAPI
+
+```python
+from fastapi import FastAPI, UploadFile
+app = FastAPI()
+
+@app.post("/process_video_frame")
+def process(file: UploadFile):
+    # Process with HAC
+    return hac.process_frame(frame)
+```
+
+---
+
+## Agentic Integration
+
+### Examples
+
+* **Clip Agent**: Monitors action types to trigger highlight generation.
+* **Strategy Agent**: Uses formation analytics for decision support.
+* **AR Agent**: Augments live video with speeds, names, actions.
+
+---
+
+## Development & Testing Workflow
+
+### Folder Setup
+
+```bash
+hac/
+├── data/
+├── scripts/
+├── models/
+├── logs/
+├── datasets/
+├── api/
+└── tests/
+```
+
+### Logging
+
+* Store all logs as `log_YYYYMMDD.json`
+* Each module logs timestamps, inputs, outputs, errors
+
+### Testing
+
+* Write PyTest modules for:
+
+  * DB connection
+  * Video downloader
+  * Frame extractor
+  * Annotation parsing
+  * Model inference on dummy frame
+
+### Documentation
+
+* Use Markdown for module READMEs (scripts/, models/, datasets/)
+* Maintain changelog.md per update
+
+---
+
+## Final Output: Game State Object
+
+```json
+{
+  "frame_id": 12345,
+  "timestamp_ms": 543210,
+  "game_state": {
+    "possession": "team_home",
+    "ball": {
+      "position_px": [960, 540],
+      "position_field": [0.0, 15.0],
+      "speed_kmh": 25.5
+    },
+    "players": [ ... ],
+    "game_events": [ ... ]
+  }
+}
+```
+
+This document serves as the living guide and companion to building HAC, executable step-by-step in Cursor/Windsurf with full terminal control, testability, and LLM-understandable structure for extension into agentic applications.

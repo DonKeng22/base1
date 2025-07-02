@@ -1,0 +1,175 @@
+This refined plan prioritizes data acquisition, a powerful annotation pipeline, and the sequential training of a multi-modal AI system that deeply understands the geometry and actions of field hockey. Your survival now hinges on creating a truly unique and powerful dataset and the models trained on it.
+The Revised Mission: Project "Odysseus"
+The goal is to navigate the vast oceans of public data, bring it back home to your local machine, and forge it into a singular, intelligent artifact: the Hockey Analytics Core (HAC).
+The HAC Vision: A unified, locally-trainable software module that ingests raw hockey video and outputs a rich, structured "Game State" object. This object will contain not just what's happening (player positions), but how it's happening (body pose, action classification) and why it might happen next (based on geometric analysis).
+Phase 0: The Laboratory - Advanced Local Setup
+Objective: Prepare your local environment for a data-heavy, multi-modal training pipeline.
+Core Technology:
+OS/GPU: Ubuntu 22.04 / WSL2 with RTX 4070, NVIDIA Drivers, CUDA Toolkit 12.x.
+Containerization: Docker & NVIDIA Container Toolkit (still non-negotiable).
+Data Backend: PostgreSQL with PostGIS extension. We are moving beyond simple file storage. PostGIS will allow us to store and query geometric data (like player positions, ball trajectories) efficiently. We'll run this in a Docker container.
+File Storage: A dedicated high-speed SSD for raw video, frames, and datasets. Create a clear directory structure: /data/raw_video, /data/processed/frames, /data/datasets/yolo, /data/datasets/pose, etc.
+Key Python Libraries (in your base PyTorch Docker image):
+yt-dlp (YouTube downloader)
+opencv-python (for frame extraction, video processing)
+psycopg2-binary (for connecting to PostgreSQL)
+SQLAlchemy (for Pythonic database interaction)
+huggingface_hub, datasets (for pulling from Hugging Face)
+ultralytics (for YOLO models)
+mmcv, mmpose, mmaction2 (for advanced pose and action recognition from OpenMMLab)
+Success Criteria: You have a PostgreSQL server running in Docker. You can run a Python script from another container that connects to the database, creates a table, and inserts a test record. Your file system is organized.
+Phase 1: The Great Data Expedition - Acquisition & Cataloging
+Objective: Systematically acquire and process a large corpus of free, legal field hockey video data. Quality and organization are paramount.
+Blueprint: Data Acquisition Pipeline
+Generated mermaid
+graph TD
+    subgraph "Data Sources"
+        A[YouTube Channels]
+        B[Internet Archive]
+        C[Hugging Face Datasets]
+    end
+
+    subgraph "Local Processing Machine (RTX 4070)"
+        D(Acquisition Script) --> E{Raw Video Storage}
+        E --> F(Video Processing Engine)
+        F --> G{Segmented Clips & Keyframes}
+        F --> H(Metadata Extraction)
+        H --> I[PostgreSQL Database]
+        G --> I
+    end
+
+    A --> D
+    B --> D
+    C --> D
+Use code with caution.
+Mermaid
+Step-by-Step Plan:
+Source Identification:
+YouTube: Use search filters to find channels dedicated to field hockey (e.g., FIH, official league channels, coaching channels). Create a list of target channel URLs.
+Internet Archive: Search for "field hockey" with filters for video media type. The quality may vary, but it's a valuable source.
+Hugging Face: Search for video datasets or sports-related datasets that might contain relevant clips.
+Automated Acquisition Script (Python):
+Action: Write a script that takes the list of sources.
+Action: Use yt-dlp to download videos from YouTube. Use Python's requests or archive.org libraries for the Internet Archive.
+Action: As each video is downloaded, log its metadata (source URL, title, duration, resolution) into a videos table in your PostgreSQL database. This catalog is your "source of truth."
+Video Processing Engine (Python + OpenCV/FFmpeg):
+Action: Create a script that scans the videos table for unprocessed entries.
+Action: For each video, perform two tasks:
+Shot Boundary Detection: Use a library like PySceneDetect to automatically split the long game footage into smaller, more manageable clips based on camera cuts. This is crucial for creating clips for action recognition. Store these clips with references back to the parent video.
+Keyframe Extraction: Extract frames at a regular interval (e.g., 2-5 FPS). These frames will be used for object detection and pose estimation annotation.
+Action: Store metadata for each clip and keyframe in the database, linking back to the original video.
+Success Criteria: You have a database containing metadata for at least 100 videos and their associated clips/keyframes, with the actual files stored neatly on your SSD. You can query the database to find, for example, all video clips between 10 and 30 seconds long.
+Phase 2: The Annotation Engine - Building Your "Ground Truth"
+Objective: Create a seamless workflow for annotating data for multiple, specific tasks. This is the human-in-the-loop system that makes your models unique.
+Technology: CVAT (Computer Vision Annotation Tool), running in Docker and integrated with your pipeline.
+Blueprint: The Annotation & Feedback Loop
+Generated mermaid
+graph TD
+    A[PostgreSQL DB] -- "Query for un-annotated data" --> B(Annotation Task Creation Script)
+    B -- "Create Task via API" --> C(CVAT Server)
+    C -- "User Annotates Data" --> D(Human Annotator)
+    D --> C
+    C -- "Export completed annotations (XML/JSON)" --> E(Annotation Parser Script)
+    E -- "Parse & Structure Data" --> F{Formatted Datasets}
+    F --> G[Model Training Pipeline]
+    F -- "Store annotation metadata" --> A
+Use code with caution.
+Mermaid
+Step-by-Step Plan:
+Setup CVAT:
+Action: Deploy CVAT using their official Docker Compose instructions. Configure it to use object storage (like a local MinIO container) or a shared volume so your other scripts can access the data.
+Multi-Task Annotation Projects:
+Action: In CVAT, create separate projects for different tasks to keep things organized.
+Project 1: Object Detection.
+Labels: player_home, player_away, ball, stick, goalkeeper.
+Task: Annotate bounding boxes on the keyframes you extracted.
+Project 2: Pose Estimation.
+Labels: Use a standard keypoint skeleton (e.g., COCO's 17 keypoints: nose, eyes, shoulders, elbows, etc.).
+Task: On a subset of the player bounding boxes, annotate the keypoints. This is time-consuming, so prioritize clear shots of players performing actions.
+Project 3: Action Classification.
+Labels: pass, shot_on_goal, dribble, tackle, idle.
+Task: This is different. You will load the video clips you segmented. The task is to apply a single tag to the entire clip. This is much faster than frame-by-frame annotation.
+Integration Scripts:
+Action: Write a Python script (create_task.py) that queries your PostgreSQL database for un-annotated data, finds the corresponding files, and uses the CVAT API to automatically create a new annotation task.
+Action: Write a Python script (parse_exports.py) that periodically checks CVAT for completed tasks, downloads the annotation files (e.g., in YOLO or COCO format), and processes them into a format ready for training.
+Success Criteria: You can run a single command that finds 1000 un-annotated frames, creates a CVAT task, you can then go to the CVAT web UI to perform the annotation, and finally run another command to pull the results and save them as a ready-to-use dataset file.
+Phase 3: The Unified Module - Sequential Model Training
+Objective: Train a cascade of specialized models, each building on the last, to achieve deep game understanding. You will train these one by one, validating each before moving to the next.
+Sub-Module A: Foundational Detection & Pose (The "Where" and "How")
+Model: YOLOv8-Pose. This is a highly efficient model that performs object detection and pose estimation simultaneously.
+Dataset: The annotated keyframes from your "Object Detection" and "Pose Estimation" CVAT projects.
+Training:
+Action: Use the Ultralytics library. Start with the pre-trained YOLOv8-Pose model.
+Action: Fine-tune the model on your custom hockey dataset. Your RTX 4070 is perfect for this. The goal is a single model that, given a frame, outputs bounding boxes for players/ball and the 2D keypoints for each player.
+Validation: Run the model on test video frames. Does it correctly identify players and their poses during different phases of the game?
+Sub-Module B: Action Recognition (The "What")
+Model: A video-based classifier like SlowFast or MViT (Mobile Video Transformer). OpenMMLab's mmaction2 toolbox is excellent for this.
+Dataset: The video clips tagged with action labels from your "Action Classification" CVAT project.
+Training:
+Action: The input to this model will not just be the video clip, but also the pose data extracted from Sub-Module A. This is called a multi-modal input and makes the model much more accurate. Pose is a more powerful signal for action than raw pixels.
+Action: Fine-tune a pre-trained action recognition model on your labeled clips. This trains the model to associate sequences of pose changes with specific action labels like "shot_on_goal".
+Validation: Feed a new clip through the pose estimator and then the action classifier. Does it correctly label the action?
+Sub-Module C: Geometric & Physics Engine (The "Why")
+This is not an ML model, but a crucial analytics layer. It's a Python module that uses the output of the previous models.
+Inputs: Player bounding boxes, player poses, ball position.
+Functionality:
+Camera Calibration: Before processing a video, you need to estimate the camera parameters. This can be done by asking the user to click the four corners of the field at the start, which allows you to compute a homography matrix. This matrix lets you map image coordinates to real-world field coordinates.
+Vector & Angle Calculation: With players and ball in a top-down 2D coordinate system, you can calculate:
+Angle of a player's shot relative to the goal.
+Speed of the ball (distance over time).
+Player running speed.
+Formation analysis (e.g., calculate the team's centroid).
+Possession logic based on proximity of players to the ball.
+Validation: Check the outputs on a test video. Are the calculated speeds and angles logical?
+Sub-Module D: Image Reconstruction (The "Clarity")
+Model: A Generative Super-Resolution model like ESRGAN (Enhanced Super-Resolution Generative Adversarial Networks).
+Use Case: This is an enhancement step. When the ball is far away and blurry, or a player's jersey number is unreadable, you can pass a cropped image of that object through the ESRGAN model.
+Training:
+Action: You can fine-tune a pre-trained ESRGAN model. The dataset would be pairs of high-resolution images of players/balls and their artificially downscaled versions.
+Integration: This module is called on-demand by the main pipeline when a region of interest needs enhancement.
+Phase 4: Unification - The "Hockey Analytics Core" (HAC) API
+Objective: Combine the outputs of all sub-modules into a single, coherent, and queryable format.
+Blueprint: The Unified Game State Object
+This is a JSON object generated for every frame (or every Nth frame) of the video.
+Generated json
+{
+  "frame_id": 12345,
+  "timestamp_ms": 543210,
+  "game_state": {
+    "possession": "team_home",
+    "ball": {
+      "position_px": [960, 540],
+      "position_field": [0.0, 15.0], // Mapped to real-world coords
+      "speed_kmh": 25.5
+    },
+    "players": [
+      {
+        "track_id": 1,
+        "team": "team_home",
+        "jersey_number": "10", // Extracted via OCR or secondary classifier
+        "bbox_px": [400, 300, 450, 400],
+        "pose_2d": { "nose": [425, 310], ... },
+        "current_action": {
+          "class": "dribble",
+          "confidence": 0.92
+        },
+        "speed_kmh": 12.1
+      },
+      ...
+    ],
+    "game_events": [ // Events that just occurred
+      { "event_type": "team_home_shot_on_goal", "confidence": 0.88 }
+    ]
+  }
+}
+Use code with caution.
+Json
+Implementation:
+Action: Create a main Python class, HockeyAnalyticsCore.
+Action: Its __init__ method will load all the trained models (YOLO-Pose, Action Classifier, ESRGAN) into memory (leveraging the 4070's VRAM).
+Action: It will have a single main method: process_frame(frame). This method orchestrates the entire cascade:
+Run frame through YOLO-Pose model.
+For each detected player, pass their recent history of poses to the Action Recognition model.
+Run the geometric engine on the results.
+Assemble the final JSON "Game State" object.
+Action: Wrap this HAC in a simple FastAPI server. This creates an API endpoint (/process_video_frame) that allows any other application (like the broadcast system from the first plan) to get this rich data.

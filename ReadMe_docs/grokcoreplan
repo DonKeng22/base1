@@ -1,0 +1,402 @@
+The document assumes you are using Ubuntu 22.04 via WSL2 on a Windows machine with an NVIDIA RTX 4070 GPU, and that Cursor is used for code editing and version control integration. All artifacts (code, scripts, configurations) are wrapped in <xaiArtifact> tags as required, with unique UUIDs for new artifacts and appropriate titles and content types. Logging and documentation strategies are integrated to ensure traceability and reproducibility.
+
+Project Odysseus: Hockey Analytics Core (HAC) Implementation Guide
+This document provides a step-by-step guide to implement the Hockey Analytics Core (HAC), a multi-modal AI system that processes field hockey videos to produce a structured "Game State" object containing player positions, poses, actions, and geometric insights. The implementation uses Cursor for coding and WSL2 (Ubuntu 22.04) for execution on a system with an NVIDIA RTX 4070 GPU. The pipeline is containerized with Docker, uses PostgreSQL with PostGIS for data storage, and integrates with agentic applications like coaching tools and broadcast overlays.
+
+Project Overview
+Objective: Build a locally trainable software module that ingests raw field hockey video and outputs a rich "Game State" JSON object, deployable in real-time analytics applications.
+Phases:
+Phase 0: Set up the local environment (Docker, PostgreSQL, file structure).
+Phase 1: Acquire and process field hockey video data.
+Phase 2: Annotate data for object detection, pose estimation, and action classification.
+Phase 3: Train a cascade of models (YOLOv8-Pose, SlowFast, Geometric Engine).
+Phase 4: Unify models into a FastAPI-based HAC API and integrate with agentic applications.
+Phase 5: Validate and deploy the system.
+Tools:
+Hardware: RTX 4070 (8GB VRAM), high-speed NVMe SSD (2TB+).
+Software: Ubuntu 22.04 (via WSL2), Docker, PostgreSQL with PostGIS, Python 3.10, Cursor IDE.
+Libraries: yt-dlp, opencv-python, psycopg2-binary, SQLAlchemy, ultralytics, mmcv, mmpose, mmaction2, fastapi, uvicorn.
+Logging: Use Python’s logging module to track pipeline execution, stored in /data/logs.
+Documentation: Maintain a README.md and inline code comments for clarity and reproducibility.
+Directory Structure
+Create the following structure on your SSD to organize data, code, and outputs:
+
+text
+
+
+
+/data
+├── raw_video/           # Raw downloaded videos
+├── processed
+│   ├── frames/         # Extracted keyframes
+│   └── clips/          # Segmented video clips
+├── datasets
+│   ├── yolo/           # YOLO-compatible datasets
+│   ├── pose/           # Pose estimation datasets
+│   └── action/         # Action recognition datasets
+├── models/              # Trained model weights
+├── logs/                # Pipeline execution logs
+└── src/                 # Source code for scripts and API
+Terminal Command to create the directory structure:
+
+create_dirs.sh
+x-shellscript
+Edit in files
+•
+Show inline
+Execution:
+
+Open a terminal in WSL2 (wsl from Windows Command Prompt).
+Run: chmod +x create_dirs.sh && ./create_dirs.sh
+Verify: ls -R /data
+Logging:
+
+Log directory creation in /data/logs/setup.log.
+Use: echo "$(date) - Created directory structure" >> /data/logs/setup.log
+Documentation:
+
+Create a README.md in /data:
+README.md
+markdown
+Edit in files
+•
+Show inline
+Phase 0: The Laboratory - Advanced Local Setup
+Objective: Establish a robust local environment for data processing, annotation, and model training.
+
+Step 0.1: Install WSL2 and Ubuntu 22.04
+Execution:
+Open Windows PowerShell as Administrator.
+Run: wsl --install -d Ubuntu-22.04
+Set up Ubuntu with a username and password.
+Update Ubuntu: sudo apt-get update && sudo apt-get upgrade -y
+Testing:
+Verify WSL2: wsl --status (should show Ubuntu-22.04 as default).
+Verify Ubuntu version: lsb_release -a
+Logging: echo "$(date) - Installed WSL2 and Ubuntu 22.04" >> /data/logs/setup.log
+Documentation: Update README.md with WSL2 setup instructions.
+Step 0.2: Install NVIDIA Drivers and CUDA Toolkit
+Execution:
+Install NVIDIA drivers for WSL2:
+bash
+
+
+
+sudo apt-get install -y nvidia-driver-535
+Install CUDA Toolkit 12.x:
+bash
+
+
+
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+sudo dpkg -i cuda-keyring_1.0-1_all.deb
+sudo apt-get update
+sudo apt-get install -y cuda-toolkit-12-2
+Testing:
+Verify GPU: nvidia-smi (should list RTX 4070).
+Verify CUDA: nvcc --version (should show 12.x).
+Logging: echo "$(date) - Installed NVIDIA drivers and CUDA Toolkit" >> /data/logs/setup.log
+Documentation: Add CUDA installation steps to README.md.
+Step 0.3: Install Docker and NVIDIA Container Toolkit
+Execution:
+install_docker.sh
+x-shellscript
+Edit in files
+•
+Show inline
+Run: chmod +x install_docker.sh && ./install_docker.sh
+Testing:
+Verify Docker: docker --version
+Verify NVIDIA Docker: docker run --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
+Logging: echo "$(date) - Installed Docker and NVIDIA Container Toolkit" >> /data/logs/setup.log
+Documentation: Add Docker setup to README.md.
+Step 0.4: Set Up PostgreSQL with PostGIS
+Execution:
+setup_postgres.sh
+x-shellscript
+Edit in files
+•
+Show inline
+Run: chmod +x setup_postgres.sh && ./setup_postgres.sh
+Testing:
+Connect to database: psql -h localhost -U postgres -d postgres
+Verify PostGIS: SELECT postgis_version();
+Logging: echo "$(date) - Set up PostgreSQL with PostGIS" >> /data/logs/setup.log
+Documentation: Add PostgreSQL setup to README.md.
+Step 0.5: Build Custom PyTorch Docker Image
+Execution:
+Dockerfile
+dockerfile
+Edit in files
+•
+Show inline
+Build: docker build -t hockey-analytics-core /data/src
+Testing:
+Run container: docker run --gpus all -it hockey-analytics-core python -c "import torch; print(torch.cuda.is_available())"
+Expected output: True
+Logging: echo "$(date) - Built PyTorch Docker image" >> /data/logs/setup.log
+Documentation: Add Docker image details to README.md.
+Step 0.6: Test Database Connectivity
+Execution:
+test_db.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --network host -v /data:/data hockey-analytics-core python /app/test_db.py
+Testing:
+Check /data/logs/db_test.log for success messages.
+Expected output: [(1, 'test_record')]
+Documentation: Add database test instructions to README.md.
+Success Criteria:
+
+WSL2, Docker, PostgreSQL, and PyTorch environment are operational.
+Database connectivity is verified.
+Logs and README.md are updated.
+Phase 1: The Great Data Expedition - Acquisition & Cataloging
+Objective: Acquire and process a diverse corpus of field hockey videos, storing metadata in PostgreSQL.
+
+Step 1.1: Identify Data Sources
+Execution:
+Manually search YouTube for channels like "FIH Hockey," "USA Field Hockey," and "EuroHockey."
+Search Internet Archive for "field hockey game footage" (media type: video).
+Check Hugging Face for sports video datasets (e.g., Sports-1M).
+Create a CSV file with source URLs:
+sources.csv
+csv
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Testing: Verify CSV file: cat /data/src/sources.csv
+Logging: echo "$(date) - Created sources.csv" >> /data/logs/acquisition.log
+Documentation: Add source identification to README.md.
+Step 1.2: Download Videos
+Execution:
+acquire_videos.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --network host -v /data:/data hockey-analytics-core python /app/acquire_videos.py
+Testing:
+Verify files in /data/raw_video.
+Query database: psql -h localhost -U postgres -d postgres -c "SELECT * FROM videos LIMIT 5"
+Logging: Check /data/logs/acquisition.log for download status.
+Documentation: Add acquisition instructions to README.md.
+Step 1.3: Process Videos
+Execution:
+process_videos.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --network host -v /data:/data hockey-analytics-core python /app/process_videos.py
+Testing:
+Verify clips in /data/processed/clips and frames in /data/processed/frames.
+Query: psql -h localhost -U postgres -d postgres -c "SELECT * FROM clips WHERE end_time - start_time BETWEEN 10 AND 30 LIMIT 5"
+Logging: Check /data/logs/processing.log.
+Documentation: Add processing instructions to README.md.
+Success Criteria:
+
+100 videos downloaded, 1,000 clips segmented, 10,000 keyframes extracted.
+Database queries return expected results.
+Logs and documentation are updated.
+Phase 2: The Annotation Engine - Building Ground Truth
+Objective: Annotate data for object detection, pose estimation, and action classification using CVAT.
+
+Step 2.1: Set Up CVAT
+Execution:
+setup_cvat.sh
+x-shellscript
+Edit in files
+•
+Show inline
+Run: chmod +x setup_cvat.sh && ./setup_cvat.sh
+Testing:
+Access CVAT: Open http://localhost:8080 in a browser.
+Log in with default credentials (admin, yourpassword).
+Logging: echo "$(date) - Set up CVAT" >> /data/logs/setup.log
+Documentation: Add CVAT setup to README.md.
+Step 2.2: Create Annotation Tasks
+Execution:
+create_cvat_tasks.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --network host -v /data:/data hockey-analytics-core python /app/create_cvat_tasks.py
+Testing:
+Verify tasks in CVAT UI.
+Annotate a sample task manually to confirm workflow.
+Logging: Check /data/logs/annotation.log.
+Documentation: Add annotation instructions to README.md.
+Step 2.3: Export Annotations
+Execution:
+parse_annotations.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --network host -v /data:/data hockey-analytics-core python /app/parse_annotations.py
+Testing:
+Verify annotation files in /data/datasets.
+Check JSON structure for correctness.
+Logging: Check /data/logs/annotation.log.
+Documentation: Add export instructions to README.md.
+Success Criteria:
+
+CVAT is running and tasks are created.
+1,000 frames annotated for object detection, 500 for pose estimation, 500 clips for action classification.
+Annotations are exported in YOLO and COCO formats.
+Phase 3: The Unified Module - Sequential Model Training
+Objective: Train a cascade of models for detection, pose estimation, action recognition, and geometric analysis.
+
+Step 3.1: Train YOLOv8-Pose
+Execution:
+train_yolo_pose.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Create /data/datasets/yolo/data.yaml:
+data.yaml
+yaml
+Edit in files
+•
+Show inline
+Run: docker run --gpus all -v /data:/data hockey-analytics-core python /app/train_yolo_pose.py
+Testing:
+Verify model weights in /data/models/yolov8-pose.pt.
+Test inference: docker run --gpus all -v /data:/data hockey-analytics-core yolo predict model=/data/models/yolov8-pose.pt source=/data/processed/frames/test.jpg
+Check mAP@0.5 > 0.8, keypoint accuracy > 0.75 in /data/logs/training.log.
+Logging: Check /data/logs/training.log.
+Documentation: Add YOLO training to README.md.
+Step 3.2: Train SlowFast Action Recognition
+Execution:
+train_action.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --gpus all -v /data:/data hockey-analytics-core python /app/train_action.py
+Testing:
+Verify model weights in default mmaction2 output directory.
+Test inference on a clip: docker run --gpus all -v /data:/data hockey-analytics-core python -c "from mmaction.apis import inference_recognizer; print(inference_recognizer('/data/processed/clips/test.mp4'))"
+Check top-1 accuracy > 0.85 in /data/logs/training.log.
+Logging: Check /data/logs/training.log.
+Documentation: Add SlowFast training to README.md.
+Step 3.3: Implement Geometric Engine
+Execution:
+geometric_engine.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --network host -v /data:/data hockey-analytics-core python /app/geometric_engine.py
+Testing:
+Test with sample frame and dummy detections.
+Verify database: psql -h localhost -U postgres -d postgres -c "SELECT * FROM game_states LIMIT 1"
+Logging: Check /data/logs/processing.log.
+Documentation: Add geometric engine details to README.md.
+Success Criteria:
+
+YOLOv8-Pose achieves mAP@0.5 > 0.8.
+SlowFast achieves top-1 accuracy > 0.85.
+Geometric engine correctly maps positions to field coordinates.
+Phase 4: Unification - The HAC API
+Objective: Deploy a unified FastAPI-based API integrating all models.
+
+Step 4.1: Implement HAC API
+Execution:
+hac_api.py
+python
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Run: docker run --network host -v /data:/data hockey-analytics-core python /app/hac_api.py
+Testing:
+Test endpoint: curl -X POST -H "Content-Type: application/octet-stream" --data-binary @/data/processed/frames/test.jpg http://localhost:8000/process_frame
+Verify JSON response structure.
+Logging: Check /data/logs/api.log.
+Documentation: Add API setup to README.md.
+Step 4.2: Integrate with Agentic Application (React Dashboard)
+Execution:
+dashboard.html
+html
+Edit in files
+•
+Show inline
+Save in /data/src using Cursor.
+Serve: python -m http.server 3000 --directory /data/src
+Testing:
+Open http://localhost:3000/dashboard.html.
+Verify dashboard displays game state data.
+Logging: Log dashboard access in /data/logs/api.log.
+Documentation: Add dashboard integration to README.md.
+Success Criteria:
+
+API processes frames at 1 frame/second.
+Dashboard displays real-time game state data.
+Phase 5: Iterative Validation and Deployment
+Objective: Validate the HAC system and deploy for agentic applications.
+
+Step 5.1: Validate Models
+Execution:
+YOLOv8-Pose: Run validation script from Phase 3.1.
+SlowFast: Run inference on test clips.
+Geometric Engine: Verify field coordinate accuracy.
+Testing:
+Check metrics: mAP@0.5 > 0.8, action accuracy > 0.85, homography error < 5%.
+Log results in /data/logs/validation.log.
+Documentation: Add validation results to README.md.
+Step 5.2: Deploy for Pilot Application
+Execution:
+Deploy API: Run hac_api.py in Docker.
+Test with a local college team’s game footage.
+Integrate with coaching tool via React dashboard.
+Testing:
+Verify real-time performance with live video feed.
+Collect feedback from coaches.
+Logging: Log deployment status in /data/logs/deployment.log.
+Documentation: Add deployment instructions to README.md.
+Success Criteria:
+
+System processes live video with minimal latency.
+Feedback confirms usability for coaching applications.
+Logging Strategy
+Setup Logs: /data/logs/setup.log for environment setup.
+Acquisition Logs: /data/logs/acquisition.log for video downloads.
+Processing Logs: /data/logs/processing.log for video segmentation and frame extraction.
+Annotation Logs: /data/logs/annotation.log for CVAT tasks.
+Training Logs: /data/logs/training.log for model training.
+API Logs: /data/logs/api.log for API requests.
+Validation Logs: /data/logs/validation.log for performance metrics.
+Deployment Logs: /data/logs/deployment.log for pilot deployment.
+Documentation Strategy
+Update README.md after each phase with detailed instructions and results.
+Use inline comments in all scripts for clarity.
+Maintain a CHANGELOG.md for tracking updates:
+CHANGELOG.md
+markdown
+Edit in files
+•
+Show inline
+Execution Timeline
+Phase 0: 1 week (environment setup).
+Phase 1: 2 weeks (data acquisition and processing).
+Phase 2: 3 weeks (annotation).
+Phase 3: 4 weeks (model training).
+Phase 4: 2 weeks (API and integration).
+Phase 5: 2 weeks (validation and deployment).
+Total: ~14 weeks.
+This document provides a clear, executable path for an LLM to implement the HAC using Cursor and WSL2, with terminal commands, testing protocols, logging, and documentation. Each step is designed to be self-contained, with artifacts for scripts and configurations to ensure reproducibility. The pipeline is optimized for the RTX 4070 and scalable for agentic applications like coaching tools and broadcast overlays.

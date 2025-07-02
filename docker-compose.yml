@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: odysseus_db
+    environment:
+      - POSTGRES_USER=hockey_user
+      - POSTGRES_PASSWORD=strongpassword
+      - POSTGRES_DB=hockey_analytics
+    volumes:
+      - odysseus-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hockey_user -d hockey_analytics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  
+
+  dev_env:
+    image: pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
+    container_name: odysseus_dev
+    command: /bin/bash -c "apt-get update && apt-get install -y git iputils-ping build-essential ffmpeg && pip install --no-cache-dir --upgrade pip setuptools wheel && pip install --no-cache-dir git+https://github.com/ultralytics/ultralytics.git opencv-python psycopg2-binary SQLAlchemy PySceneDetect fastapi uvicorn[standard] python-multipart 'requests' && sleep infinity"
+    volumes:
+      - .:/workspace # Mount the entire project directory
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    environment:
+      - CUDA_HOME=/usr/local/cuda
+      - MMCV_WITH_OPS=1
+    depends_on:
+      - db
+
+volumes:
+  odysseus-db-data:
+  
